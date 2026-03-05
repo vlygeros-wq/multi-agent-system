@@ -1,0 +1,22 @@
+{
+  "name": "multi-agent-system",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Vassyly Lygeros",
+    "email": "vlygeros@gmail.com"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.0"
+  }
+}
