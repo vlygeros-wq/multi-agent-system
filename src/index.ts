@@ -21,10 +21,23 @@ import {
   QATesterAgent,
 } from "./agents";
 import { logger } from "./utils/logger";
+import { createLLM } from "./services/llm/factory";
+import { config } from "dotenv";
 
 // ─── System bootstrap ─────────────────────────────────────────────────────────
 
+config({ path: "./.env" });
+
+
 async function main(): Promise<void> {
+  
+  if ( false ) {
+    const llm = createLLM(process.env.LLM_PROVIDER || "gemini");
+    const response = await llm.generate("Tell me about quantum computing.");
+    logger.info("LLM Response", response);
+    process.exit(0);
+  }
+
   logger.divider();
   logger.info("system", "🚀 Multi-Agent System starting…");
   logger.divider();

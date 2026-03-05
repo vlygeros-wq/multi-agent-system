@@ -12,8 +12,11 @@
     "email": "vlygeros@gmail.com"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@google/genai": "^1.44.0",
     "axios": "^1.6.0",
-    "dotenv": "^16.3.0"
+    "dotenv": "^16.3.0",
+    "openai": "^6.26.0"
   },
   "devDependencies": {
     "ts-node": "^10.9.1",
