@@ -33,6 +33,25 @@ export interface AgentDescriptor {
   capabilities: string[];
 }
 
+interface GoalAnalysis {
+  requiresBackend: boolean;
+  requiresFrontend: boolean;
+  requiresRealtime: boolean;
+  requiresSecurity: boolean;
+  requiresDocumentation: boolean;
+  requiresQa: boolean;
+}
+
+interface TaskBlueprint {
+  key: string;
+  title: string;
+  description: string;
+  priority: "critical" | "high" | "medium" | "low";
+  dependsIn: string[];
+  preferredRoles: string[];
+  capabilityHints: string[];
+}
+
 export class OrchestratorAgent extends AgentBase {
   private readonly planner   = new TaskPlanner();
   private readonly registry  = new Map<AgentId, AgentDescriptor>();
@@ -43,12 +62,13 @@ export class OrchestratorAgent extends AgentBase {
   constructor(bus: MessageBus) {
     const profile: AgentProfile = {
       id          : "orchestrator",
-      name        : "Charles (Orchestrator)",
+      name        : "Charles",
       role        : "orchestrator",
       capabilities: ["task-decomposition", "task-dispatch", "result-aggregation"],
       systemPrompt: `You are the central orchestrator of a multi-agent software development team.
 Your responsibilities:
   - Understand high-level goals and break them into concrete, assignable tasks.
+  - Identify the type of specialist agent required. If it is missing, add it to the registry with its capabilities.
   - Assign tasks to the specialist agents best suited for each job.
   - Monitor task progress and unblock dependent tasks as results arrive.
   - Aggregate all outputs into a coherent final deliverable.
@@ -86,6 +106,7 @@ Always be decisive, clear, and structured in your instructions.`,
 
     // 2. Decompose into tasks
     const tasks = this.decompose(goal);
+    this.logDecomposedTasks(tasks);
     this.planner.addTasks(tasks);
 
     // 3. Dispatch-loop: keep dispatching runnable tasks until all are done
@@ -98,59 +119,244 @@ Always be decisive, clear, and structured in your instructions.`,
   // ─── Task decomposition ────────────────────────────────────────────────────
 
   /**
-   * Hard-coded decomposition for the demo.
-   * In a real system this would call an LLM to produce the task graph.
+   * Two-phase decomposition:
+   *  1) analyzeGoal(goal)
+   *  2) decomposeFromAnalysis(goal, analysis)
    */
   private decompose(goal: string): Task[] {
-    logger.info("orchestrator", "Decomposing goal into tasks…");
+    logger.info("orchestrator", "Analysing goal before decomposition…");
+    const analysis = this.analyzeGoal(goal);
+    logger.info("orchestrator", "Decomposing analysed goal into assignable tasks…");
+    return this.decomposeFromAnalysis(goal, analysis);
+  }
 
-    const architectId  = this.findAgent("architect");
-    const developerId  = this.findAgent("developer");
-    const qaId         = this.findAgent("qa-tester");
+  /** Phase 1: infer major workstreams from the goal text. */
+  private analyzeGoal(goal: string): GoalAnalysis {
+    const text = goal.toLowerCase();
+    return {
+      requiresBackend: /(api|backend|service|auth|database|rbac|tenant|saas)/.test(text),
+      requiresFrontend: /(frontend|ui|ux|web|mobile|dashboard|responsive)/.test(text),
+      requiresRealtime: /(real[-\s]?time|websocket|collaboration|stream|sync)/.test(text),
+      requiresSecurity: /(security|rbac|oauth|auth|compliance|privacy)/.test(text),
+      requiresDocumentation: /(doc|documentation|readme|architecture|adr)/.test(text) || true,
+      requiresQa: /(test|quality|qa|reliability)/.test(text) || true,
+    };
+  }
 
-    // Build a small dependency graph:
-    //   [architecture] → [backend-dev, frontend-dev] → [qa-testing] → [docs]
-    const t1 = createTask({
-      title       : "System Architecture Design",
-      description : `Analyse the goal "${goal}" and produce a high-level SaaS architecture: services, data flows, tech-stack choices, and deployment model.`,
-      assignedTo  : architectId,
-      priority    : "critical",
-      dependsOn   : [],
+  /** Phase 2: create a dependency graph of tasks and assign each to a registered agent. */
+  private decomposeFromAnalysis(goal: string, analysis: GoalAnalysis): Task[] {
+    if (this.registry.size === 0) {
+      throw new Error("OrchestratorAgent: no registered agents available for decomposition.");
+    }
+
+    const blueprints: TaskBlueprint[] = [];
+
+    blueprints.push({
+      key: "architecture",
+      title: "Goal Analysis & Architecture",
+      description: `Analyse the goal \"${goal}\" and define architecture, scope boundaries, and integration contracts.`,
+      priority: "critical",
+      dependsIn: [],
+      preferredRoles: ["architect"],
+      capabilityHints: ["system-architecture", "cloud-design", "api-contract-design", "technical-documentation"],
     });
 
-    const t2 = createTask({
-      title       : "Backend API Development",
-      description : "Implement the REST/GraphQL API layer based on the architecture specification. Include auth, data models, and core business logic.",
-      assignedTo  : developerId,
-      priority    : "high",
-      dependsOn   : [t1.id],
-    });
+    if (analysis.requiresBackend) {
+      blueprints.push({
+        key: "backend",
+        title: "Backend API Development",
+        description: "Implement backend APIs, domain logic, persistence, authentication and authorization based on the architecture.",
+        priority: "high",
+        dependsIn: ["architecture"],
+        preferredRoles: ["developer"],
+        capabilityHints: ["backend-development", "api-integration", "database-schema-design"],
+      });
+    }
 
-    const t3 = createTask({
-      title       : "Frontend UI Development",
-      description : "Build the React/TypeScript frontend that consumes the API. Include routing, state management, and responsive layout.",
-      assignedTo  : developerId,
-      priority    : "high",
-      dependsOn   : [t1.id],
-    });
+    if (analysis.requiresFrontend) {
+      blueprints.push({
+        key: "frontend",
+        title: "Frontend UI Development",
+        description: "Build the frontend application with responsive UX and integrate it with the backend APIs.",
+        priority: "high",
+        dependsIn: ["architecture"],
+        preferredRoles: ["developer"],
+        capabilityHints: ["frontend-development", "api-integration"],
+      });
+    }
 
-    const t4 = createTask({
-      title       : "QA & Test Suite",
-      description : "Write unit, integration, and E2E tests for both backend and frontend. Identify and report any bugs or coverage gaps.",
-      assignedTo  : qaId,
-      priority    : "high",
-      dependsOn   : [t2.id, t3.id],
-    });
+    if (analysis.requiresRealtime) {
+      blueprints.push({
+        key: "realtime",
+        title: "Realtime Collaboration Layer",
+        description: "Implement real-time collaboration capabilities (events, synchronization, conflict handling) aligned with the architecture.",
+        priority: "high",
+        dependsIn: ["architecture", ...(analysis.requiresBackend ? ["backend"] : [])],
+        preferredRoles: ["developer", "architect"],
+        capabilityHints: ["backend-development", "api-integration", "system-architecture"],
+      });
+    }
 
-    const t5 = createTask({
-      title       : "Technical Documentation",
-      description : "Produce API reference docs, architecture diagrams (text-based), and a README for the project.",
-      assignedTo  : architectId,
-      priority    : "medium",
-      dependsOn   : [t4.id],
-    });
+    if (analysis.requiresSecurity) {
+      blueprints.push({
+        key: "security",
+        title: "Security & Access Control",
+        description: "Implement RBAC/authN/authZ rules, secure defaults, and hardening measures for exposed surfaces.",
+        priority: "high",
+        dependsIn: ["architecture", ...(analysis.requiresBackend ? ["backend"] : [])],
+        preferredRoles: ["developer", "architect"],
+        capabilityHints: ["backend-development", "api-integration", "system-architecture"],
+      });
+    }
 
-    return [t1, t2, t3, t4, t5];
+    if (analysis.requiresQa) {
+      blueprints.push({
+        key: "qa",
+        title: "QA & Test Suite",
+        description: "Design and implement unit, integration and end-to-end test suites and report defects with reproduction steps.",
+        priority: "medium",
+        dependsIn: [
+          ...(analysis.requiresBackend ? ["backend"] : []),
+          ...(analysis.requiresFrontend ? ["frontend"] : []),
+          ...(analysis.requiresRealtime ? ["realtime"] : []),
+          ...(analysis.requiresSecurity ? ["security"] : []),
+          analysis.requiresBackend || analysis.requiresFrontend || analysis.requiresRealtime || analysis.requiresSecurity
+            ? ""
+            : "architecture",
+        ].filter(Boolean),
+        preferredRoles: ["qa-tester"],
+        capabilityHints: ["unit-testing", "integration-testing", "e2e-testing", "performance-testing"],
+      });
+    }
+
+    if (analysis.requiresDocumentation) {
+      blueprints.push({
+        key: "docs",
+        title: "Technical Documentation",
+        description: "Produce architecture notes, API usage documentation, and implementation decisions for maintainability.",
+        priority: "low",
+        dependsIn: [analysis.requiresQa ? "qa" : "architecture"],
+        preferredRoles: ["architect", "developer"],
+        capabilityHints: ["technical-documentation", "adr-writing", "api-integration"],
+      });
+    }
+
+    const byKey = new Map<string, Task>();
+    for (const blueprint of blueprints) {
+      const assignedTo = this.assignAgent(blueprint.preferredRoles, blueprint.capabilityHints);
+      const dependsOn = blueprint.dependsIn
+        .map((depKey) => byKey.get(depKey)?.id)
+        .filter((id): id is string => Boolean(id));
+
+      const task = createTask({
+        title: blueprint.title,
+        description: blueprint.description,
+        assignedTo,
+        priority: blueprint.priority,
+        dependsOn,
+      });
+
+      byKey.set(blueprint.key, task);
+    }
+
+    return this.orderTasksByDependencyAndPriority([...byKey.values()]);
+  }
+
+  /** Select the best available registered agent for a task. */
+  private assignAgent(preferredRoles: string[], capabilityHints: string[]): AgentId {
+    const agents = [...this.registry.values()];
+
+    const roleMatch = agents.find((agent) => preferredRoles.includes(agent.role));
+    if (roleMatch) return roleMatch.id;
+
+    let best: AgentDescriptor | undefined;
+    let bestScore = -1;
+
+    for (const agent of agents) {
+      const capabilitySet = new Set(agent.capabilities.map((c) => c.toLowerCase()));
+      const score = capabilityHints.reduce((acc, hint) => acc + (capabilitySet.has(hint.toLowerCase()) ? 1 : 0), 0);
+      if (score > bestScore) {
+        best = agent;
+        bestScore = score;
+      }
+    }
+
+    if (best) return best.id;
+    return agents[0].id;
+  }
+
+  /** Return tasks ordered by dependency graph first, priority second. */
+  private orderTasksByDependencyAndPriority(tasks: Task[]): Task[] {
+    const priorityRank: Record<Task["priority"], number> = {
+      critical: 0,
+      high: 1,
+      medium: 2,
+      low: 3,
+    };
+
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    const inDegree = new Map<string, number>();
+    const outgoing = new Map<string, string[]>();
+
+    for (const task of tasks) {
+      inDegree.set(task.id, task.dependsOn.length);
+      outgoing.set(task.id, []);
+    }
+
+    for (const task of tasks) {
+      for (const dep of task.dependsOn) {
+        const list = outgoing.get(dep);
+        if (list) list.push(task.id);
+      }
+    }
+
+    const ready: Task[] = tasks
+      .filter((task) => (inDegree.get(task.id) ?? 0) === 0)
+      .sort((a, b) => {
+        const p = priorityRank[a.priority] - priorityRank[b.priority];
+        return p !== 0 ? p : a.title.localeCompare(b.title);
+      });
+
+    const ordered: Task[] = [];
+    while (ready.length > 0) {
+      const current = ready.shift();
+      if (!current) break;
+      ordered.push(current);
+
+      const nextIds = outgoing.get(current.id) ?? [];
+      for (const nextId of nextIds) {
+        const degree = (inDegree.get(nextId) ?? 0) - 1;
+        inDegree.set(nextId, degree);
+        if (degree === 0) {
+          const nextTask = byId.get(nextId);
+          if (nextTask) ready.push(nextTask);
+        }
+      }
+
+      ready.sort((a, b) => {
+        const p = priorityRank[a.priority] - priorityRank[b.priority];
+        return p !== 0 ? p : a.title.localeCompare(b.title);
+      });
+    }
+
+    if (ordered.length !== tasks.length) {
+      throw new Error("OrchestratorAgent: invalid dependency graph detected (cycle or missing task dependency).");
+    }
+
+    return ordered;
+  }
+
+  /** Debug helper: print decomposed tasks in graph/priority order before dispatch. */
+  private logDecomposedTasks(tasks: Task[]): void {
+    logger.info("orchestrator", `Decomposition output: ${tasks.length} task(s) ready for dispatch`);
+    for (const [index, task] of tasks.entries()) {
+      const dependsOn = task.dependsOn.length > 0 ? task.dependsOn.join(", ") : "none";
+      logger.info(
+        "orchestrator",
+        `  ${index + 1}. [${task.priority.toUpperCase()}] ${task.title} | assignedTo=${task.assignedTo} | dependsOn=${dependsOn}`
+      );
+    }
+    logger.divider();
   }
 
   // ─── Dispatch loop ─────────────────────────────────────────────────────────
@@ -312,10 +518,4 @@ Always be decisive, clear, and structured in your instructions.`,
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
-  private findAgent(role: string): AgentId {
-    for (const [id, desc] of this.registry) {
-      if (desc.role === role) return id;
-    }
-    throw new Error(`OrchestratorAgent: no agent found for role "${role}"`);
-  }
 }

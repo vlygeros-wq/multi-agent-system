@@ -1,6 +1,6 @@
 // gemini-adapter.ts
 import { GoogleGenAI  } from "@google/genai";
-import { LLM } from "./llm";
+import { LLM, LLMGenerateOptions, LLMMessage } from "./llm";
 
 export class GeminiAdapter implements LLM {
   private genAI;
@@ -11,13 +11,36 @@ export class GeminiAdapter implements LLM {
     this.modelName = modelName;
   }
 
-  async generate(prompt: string, options?: Record<string, any>): Promise<string> {
+  async generate(prompt: string, options: LLMGenerateOptions = {}): Promise<string> {
+    const { messages, ...rest } = options;
+
+    const history: LLMMessage[] =
+      messages && messages.length > 0
+        ? messages
+        : [{ role: "user", content: prompt }];
+
+    const systemInstruction = history
+      .filter((m) => m.role === "system")
+      .map((m) => m.content)
+      .join("\n\n");
+
+    const contents = history
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
+
     const result = await this.genAI.models.generateContent({
         model: this.modelName,
-        contents: prompt,
-        ...options
+        contents: contents.length > 0 ? contents : [{ role: "user", parts: [{ text: prompt }] }],
+        config: {
+          ...(rest.config as Record<string, unknown> | undefined),
+          systemInstruction: systemInstruction || undefined,
+        },
+        ...rest,
     });
-    console.log("Gemini raw result:", result);
+
     return result.text ?? "";
   }
 }

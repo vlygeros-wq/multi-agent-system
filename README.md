@@ -12,14 +12,14 @@ A production-grade TypeScript implementation of a multi-agent orchestration syst
            │                │                │
     ┌──────▼──────┐ ┌───────▼───────┐ ┌──────▼───────┐
     │Orchestrator │ │   Architect   │ │  Developer   │
-    │             │ │   (Alex)      │ │  (Jordan)    │
+    │  (Charles)  │ │   (Vassyly)   │ │  (Olivier)   │
     │ - decompose │ │ - architecture│ │ - backend    │
     │ - dispatch  │ │ - ADRs        │ │ - frontend   │
     │ - aggregate │ │ - docs        │ │ - APIs       │
     └─────────────┘ └───────────────┘ └──────────────┘
                                        ┌──────────────┐
                                        │  QA Tester   │
-                                       │   (Sam)      │
+                                       │   (Fred)     │
                                        │ - unit tests │
                                        │ - e2e tests  │
                                        │ - bug reports│

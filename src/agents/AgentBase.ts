@@ -23,6 +23,8 @@ import {
 } from "../types";
 import { MessageBus } from "../flow/MessageBus";
 import { logger } from "../utils/logger";
+import { createLLM } from "../services/llm/factory";
+import { LLM, LLMGenerateOptions, LLMMessage } from "../services/llm/llm";
 
 export abstract class AgentBase {
   // ─── Identity ───────────────────────────────────────────────────────────────
@@ -33,10 +35,12 @@ export abstract class AgentBase {
 
   // ─── Per-agent conversation history ────────────────────────────────────────
   protected readonly history: ConversationTurn[] = [];
+  protected readonly llm: LLM;
 
   constructor(profile: AgentProfile, bus: MessageBus) {
     this.profile = profile;
     this.bus     = bus;
+    this.llm     = createLLM(process.env.LLM_PROVIDER ?? "gemini");
 
     // Seed history with the system prompt
     this.history.push({
@@ -119,6 +123,30 @@ export abstract class AgentBase {
 
   protected recordTurn(role: "user" | "assistant" | "system", content: string): void {
     this.history.push({ role, content, timestamp: new Date() });
+  }
+
+  protected historyToMessages(): LLMMessage[] {
+    const nonSystemHistory = this.history
+      .filter((turn) => turn.role !== "system")
+      .map((turn) => ({
+        role: turn.role,
+        content: turn.content,
+      }));
+
+    return [
+      { role: "system", content: this.profile.systemPrompt },
+      ...nonSystemHistory,
+    ];
+  }
+
+  protected async generate(prompt: string, options: LLMGenerateOptions = {}): Promise<string> {
+    this.recordTurn("user", prompt);
+    const response = await this.llm.generate(prompt, {
+      ...options,
+      messages: this.historyToMessages(),
+    });
+    this.recordTurn("assistant", response);
+    return response;
   }
 
   /** Read-only snapshot of this agent's conversation history */

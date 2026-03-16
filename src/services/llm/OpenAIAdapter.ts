@@ -1,6 +1,6 @@
 // openai-adapter.ts
 import OpenAI from "openai";
-import { LLM } from "./llm";
+import { LLM, LLMGenerateOptions, LLMMessage } from "./llm";
 
 export class OpenAIAdapter implements LLM {
   private client;
@@ -11,11 +11,18 @@ export class OpenAIAdapter implements LLM {
     this.modelName = modelName;
   }
 
-  async generate(prompt: string, options?: Record<string, any>): Promise<string> {
+  async generate(prompt: string, options: LLMGenerateOptions = {}): Promise<string> {
+    const { messages, maxTokens, ...rest } = options;
+    const finalMessages: LLMMessage[] =
+      messages && messages.length > 0
+        ? messages
+        : [{ role: "user", content: prompt }];
+
     const result = await this.client.chat.completions.create({
       model: this.modelName,
-      messages: [{ role: "user", content: prompt }],
-      ...options
+      messages: finalMessages,
+      max_tokens: maxTokens,
+      ...rest,
     });
 
     return result.choices[0].message.content ?? "";

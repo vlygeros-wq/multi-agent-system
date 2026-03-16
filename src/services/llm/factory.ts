@@ -5,7 +5,7 @@ import { OpenAIAdapter } from "./OpenAIAdapter";
 import { AnthropicAdapter } from "./AnthropicAdapter";
 
 export function createLLM(provider: string): LLM {
-  switch (provider) {
+  switch (provider.toLowerCase()) {
     case "gemini":
       return new GeminiAdapter(process.env.GEMINI_API_KEY!);
     case "openai":

@@ -78,8 +78,10 @@ async function main(): Promise<void> {
 
   // 4. Define the high-level goal
   const goal =
-    "Build a multi-tenant SaaS project-management platform with real-time " +
-    "collaboration, role-based access control, and a mobile-responsive UI.";
+    `Build a web-based debt collection application that enables financial and insurance 
+    teams to monitor unpaid invoices, assess client risk levels, and prioritize collection 
+    actions. The system must provide a KPI-driven dashboard and a detailed client list with 
+    invoice and insurance‑risk information.`;
 
   // 5. Run the full orchestration pipeline
   const report = await orchestrator.run(goal);

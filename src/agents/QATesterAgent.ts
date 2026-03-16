@@ -25,7 +25,7 @@ import {
   Task,
   MessageId,
 } from "../types";
-import { generateAgentId, generateMessageId } from "../utils/ids";
+import { generateAgentId } from "../utils/ids";
 import { logger } from "../utils/logger";
 
 export class QATesterAgent extends AgentBase {
@@ -35,7 +35,7 @@ export class QATesterAgent extends AgentBase {
   constructor(bus: MessageBus, idOverride?: AgentId) {
     const profile: AgentProfile = {
       id          : idOverride ?? generateAgentId("qa-tester"),
-      name        : "Fred (QA Engineer)",
+      name        : "Fred",
       role        : "qa-tester",
       capabilities: [
         "unit-testing",
@@ -45,7 +45,7 @@ export class QATesterAgent extends AgentBase {
         "bug-reporting",
         "acceptance-criteria-validation",
       ],
-      systemPrompt: `You are Sam, a principal QA engineer who ensures nothing ships unless it is solid.
+      systemPrompt: `You are principal QA engineer who ensures nothing ships unless it is solid.
 You specialise in:
   - Test pyramid design (unit → integration → E2E)
   - Playwright for browser automation
@@ -103,14 +103,31 @@ You write thorough, well-structured test suites and produce clear bug reports.`,
     );
 
     // Demonstrate clarification flow: ask orchestrator for clarification
-    const clarification = await this.requestClarification(
-      "What are the minimum acceptable code-coverage thresholds for this project?"
-    );
-    logger.info(this.role, `Clarification received: "${clarification}"`);
+//    const clarification = await this.requestClarification(
+//      "What are the minimum acceptable code-coverage thresholds for this project?"
+//    );
+//    logger.info(this.role, `Clarification received: "${clarification}"`);
 
-    await sleep(300);
+    const prompt = [
+      `Task title: ${task.title}`,
+      `Task description: ${task.description}`,
+      // `Clarification received: ${clarification}`,
+      "Return a complete QA strategy and test artifacts in markdown.",
+      "Include unit, integration, end-to-end, and performance test considerations.",
+    ].join("\n");
 
-    const result = this.produceTestSuite(task);
+    let result: string;
+    try {
+      result = await this.generate(prompt, {
+        maxTokens: 4096,
+        temperature: 0.2,
+      });
+    } catch (error) {
+      logger.warn(this.role, `Task "${task.title}" failed: ${String(error)}`);
+      result = `Task "${task.title}" failed: ${String(error)}`;
+      this.recordTurn("assistant", result);
+    }
+
     logger.success(this.role, `Task "${task.title}" complete.`);
     return result;
   }
@@ -123,7 +140,7 @@ You write thorough, well-structured test suites and produce clear bug reports.`,
    * message is delivered (prevents the response arriving before we listen).
    * Falls back after 2 s if the orchestrator does not reply.
    */
-  private async requestClarification(question: string): Promise<string> {
+  /*private async requestClarification(question: string): Promise<string> {
     const msgId = generateMessageId();
 
     // Register the resolver BEFORE publishing so we never miss the reply.
@@ -149,135 +166,5 @@ You write thorough, well-structured test suites and produce clear bug reports.`,
 
     return answer;
   }
-
-  // ─── Work implementations ──────────────────────────────────────────────────
-
-  private produceTestSuite(_task: Task): string {
-    return `
-## QA Test Suite
-
-### Coverage Summary
-| Layer       | Tool        | Target  | Current |
-|-------------|-------------|---------|---------|
-| Unit        | Vitest      | 85%     | 87%     |
-| Integration | Supertest   | 75%     | 78%     |
-| E2E         | Playwright  | Key flows| 100%  |
-| Performance | k6          | <200ms p95 | ✔   |
-
----
-
-### Unit Tests (Backend — AuthService)
-\`\`\`typescript
-// src/modules/auth/auth.service.test.ts
-describe("AuthService", () => {
-  it("returns token pair on valid credentials", async () => {
-    const svc = buildAuthService({ userExists: true, passwordMatch: true });
-    const result = await svc.login("user@test.com", "password123");
-    expect(result.accessToken).toBeDefined();
-    expect(result.refreshToken).toBeDefined();
-  });
-
-  it("throws INVALID_CREDENTIALS on wrong password", async () => {
-    const svc = buildAuthService({ userExists: true, passwordMatch: false });
-    await expect(svc.login("user@test.com", "wrong")).rejects.toMatchObject({
-      code: "INVALID_CREDENTIALS",
-      statusCode: 401,
-    });
-  });
-
-  it("throws INVALID_CREDENTIALS when user not found", async () => {
-    const svc = buildAuthService({ userExists: false });
-    await expect(svc.login("ghost@test.com", "any")).rejects.toMatchObject({
-      code: "INVALID_CREDENTIALS",
-    });
-  });
-});
-\`\`\`
-
-### Integration Tests (API — Items endpoints)
-\`\`\`typescript
-// tests/integration/items.test.ts
-describe("GET /api/v1/core/items", () => {
-  it("returns paginated items for authenticated user", async () => {
-    const token = await loginAsFixtureUser();
-    const res = await request(app)
-      .get("/api/v1/core/items?page=1&limit=10")
-      .set("Authorization", \`Bearer \${token}\`);
-    expect(res.status).toBe(200);
-    expect(res.body.data).toBeArray();
-    expect(res.body.meta.total).toBeGreaterThanOrEqual(0);
-  });
-
-  it("returns 401 without a token", async () => {
-    const res = await request(app).get("/api/v1/core/items");
-    expect(res.status).toBe(401);
-  });
-});
-\`\`\`
-
-### E2E Tests (Playwright — Login flow)
-\`\`\`typescript
-// tests/e2e/login.spec.ts
-test("user can log in and see dashboard", async ({ page }) => {
-  await page.goto("/login");
-  await page.fill('[data-testid="email"]',    "user@test.com");
-  await page.fill('[data-testid="password"]', "Password1!");
-  await page.click('[data-testid="submit"]');
-  await expect(page).toHaveURL("/dashboard");
-  await expect(page.locator("h1")).toContainText("Dashboard");
-});
-
-test("shows error on invalid credentials", async ({ page }) => {
-  await page.goto("/login");
-  await page.fill('[data-testid="email"]',    "user@test.com");
-  await page.fill('[data-testid="password"]', "wrong");
-  await page.click('[data-testid="submit"]');
-  await expect(page.locator('[role="alert"]')).toBeVisible();
-});
-\`\`\`
-
-### Performance Test (k6)
-\`\`\`javascript
-// tests/perf/load.k6.js
-import http from "k6/http";
-import { check, sleep } from "k6";
-
-export const options = {
-  stages: [
-    { duration: "1m",  target: 100  },
-    { duration: "3m",  target: 1000 },
-    { duration: "1m",  target: 0    },
-  ],
-  thresholds: {
-    http_req_duration: ["p(95)<200"],
-    http_req_failed:   ["rate<0.01"],
-  },
-};
-
-export default function () {
-  const res = http.get("https://api.example.com/api/v1/core/items", {
-    headers: { Authorization: \`Bearer \${__ENV.TEST_TOKEN}\` },
-  });
-  check(res, { "status 200": (r) => r.status === 200 });
-  sleep(1);
-}
-\`\`\`
-
-### Bugs Found
-| ID     | Severity | Title                                   | Status |
-|--------|----------|-----------------------------------------|--------|
-| BUG-01 | Medium   | Refresh token not invalidated on logout | Open   |
-| BUG-02 | Low      | Dashboard flickers on first mount       | Open   |
-| BUG-03 | High     | Missing rate-limit on /auth/login       | Open   |
-
-### Recommendations
-1. Add rate-limiting middleware to auth endpoints immediately (BUG-03 is security-critical).
-2. Implement token blocklist (Redis SET) on logout to fix BUG-01.
-3. Wrap Dashboard initialisation in a Suspense boundary to fix BUG-02.
-    `.trim();
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  */
 }
