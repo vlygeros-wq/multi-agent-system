@@ -65,6 +65,14 @@ export interface Task {
   resultPayload?: Record<string, unknown>;
 }
 
+/** Transcript entry for task clarification during execution */
+export interface ClarificationTurn {
+  senderId: AgentId;
+  responderId: AgentId;
+  question: string;
+  answer: string;
+}
+
 /** Snapshot of conversation turn stored per-agent */
 export interface ConversationTurn {
   role: "user" | "assistant" | "system";

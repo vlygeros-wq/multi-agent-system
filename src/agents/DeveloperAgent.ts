@@ -25,9 +25,6 @@ import { generateAgentId } from "../utils/ids";
 import { logger } from "../utils/logger";
 
 export class DeveloperAgent extends AgentBase {
-  /** Stores responses received from peer agents */
-  private readonly interAgentResponses = new Map<string, string>();
-
   constructor(bus: MessageBus, idOverride?: AgentId) {
     const profile: AgentProfile = {
       id          : idOverride ?? generateAgentId("developer"),
@@ -59,16 +56,10 @@ error handling, and performance.`,
       case "task-assignment": {
         const task = message.payload?.task as Task | undefined;
         if (!task) return;
+        this.beginTaskExecution(task, message.sender, message.payload);
         const result = await this.executeTask(task);
-        await this.send("orchestrator", "task-result", result, { taskId: task.id });
-        break;
-      }
-
-      case "inter-agent": {
-        // Receive a response from the architect (or any peer)
-        if (message.correlationId) {
-          this.interAgentResponses.set(message.correlationId, message.content);
-        }
+        const executionArtifacts = this.finishTaskExecution(task.id);
+        await this.send("orchestrator", "task-result", result, { taskId: task.id, ...executionArtifacts });
         break;
       }
 
@@ -93,8 +84,6 @@ error handling, and performance.`,
     );
 
     const prompt = [
-      `Task title: ${task.title}`,
-      `Task description: ${task.description}`,
       "Return production-grade implementation output in markdown.",
       "If backend: include APIs, validation, and persistence details.",
       "If frontend: include components, state management, and error handling.",
@@ -102,7 +91,7 @@ error handling, and performance.`,
 
     let result: string;
     try {
-      result = await this.generate(prompt, {
+      result = await this.generateTaskResult(task, [prompt], {
         maxTokens: 4096,
         temperature: 0.2,
       });
@@ -114,5 +103,12 @@ error handling, and performance.`,
 
     logger.success(this.role, `Task "${task.title}" complete.`);
     return result;
+  }
+
+  protected override getTaskExecutionGuidance(_task: Task): string[] {
+    return [
+      "If the task is underspecified, ask for the single most important missing detail only.",
+      "Do not invent missing requirements.",
+    ];
   }
 }

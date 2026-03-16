@@ -57,17 +57,11 @@ Your outputs are always structured, detailed, and include concrete tech-stack re
           logger.warn(this.role, "Received task-assignment without task payload.");
           return;
         }
+        this.beginTaskExecution(task, message.sender, message.payload);
         const result = await this.executeTask(task);
+        const executionArtifacts = this.finishTaskExecution(task.id);
         // Report result back to the orchestrator
-        await this.send("orchestrator", "task-result", result, { taskId: task.id });
-        break;
-      }
-
-      case "inter-agent": {
-        // Another agent is asking for architectural guidance
-        //logger.info(this.role, `Inter-agent query from ${message.sender}: "${message.content}"`);
-        //const response = this.answerArchitecturalQuery(message.content);
-        //await this.send(message.sender, "inter-agent", response, undefined, message.id);
+        await this.send("orchestrator", "task-result", result, { taskId: task.id, ...executionArtifacts });
         break;
       }
 
@@ -93,15 +87,13 @@ Your outputs are always structured, detailed, and include concrete tech-stack re
     );
 
     const prompt = [
-      `Task title: ${task.title}`,
-      `Task description: ${task.description}`,
       "Produce a complete, implementation-ready markdown response.",
       "Include concrete technologies, APIs, and operational considerations.",
     ].join("\n");
 
     let result: string;
     try {
-      result = await this.generate(prompt, {
+      result = await this.generateTaskResult(task, [prompt], {
         maxTokens: 4096,
         temperature: 0.2,
       });
@@ -113,5 +105,12 @@ Your outputs are always structured, detailed, and include concrete tech-stack re
 
     logger.success(this.role, `Task "${task.title}" complete.`);
     return result;
+  }
+
+  protected override getTaskExecutionGuidance(_task: Task): string[] {
+    return [
+      "If a task cannot be completed well without more information, ask one focused clarification question.",
+      "Do not fill gaps with assumptions that materially affect the architecture.",
+    ];
   }
 }

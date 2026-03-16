@@ -23,15 +23,11 @@ import {
   AgentId,
   Message,
   Task,
-  MessageId,
 } from "../types";
 import { generateAgentId } from "../utils/ids";
 import { logger } from "../utils/logger";
 
 export class QATesterAgent extends AgentBase {
-  /** Stores pending clarification resolvers keyed by correlationId */
-  private readonly clarifications = new Map<MessageId, (answer: string) => void>();
-
   constructor(bus: MessageBus, idOverride?: AgentId) {
     const profile: AgentProfile = {
       id          : idOverride ?? generateAgentId("qa-tester"),
@@ -65,20 +61,10 @@ You write thorough, well-structured test suites and produce clear bug reports.`,
       case "task-assignment": {
         const task = message.payload?.task as Task | undefined;
         if (!task) return;
+        this.beginTaskExecution(task, message.sender, message.payload);
         const result = await this.executeTask(task);
-        await this.send("orchestrator", "task-result", result, { taskId: task.id });
-        break;
-      }
-
-      case "clarification-response": {
-        // Orchestrator answered our clarification request
-        if (message.correlationId) {
-          const resolver = this.clarifications.get(message.correlationId);
-          if (resolver) {
-            this.clarifications.delete(message.correlationId);
-            resolver(message.content);
-          }
-        }
+        const executionArtifacts = this.finishTaskExecution(task.id);
+        await this.send("orchestrator", "task-result", result, { taskId: task.id, ...executionArtifacts });
         break;
       }
 
@@ -102,23 +88,14 @@ You write thorough, well-structured test suites and produce clear bug reports.`,
       { taskId: task.id }
     );
 
-    // Demonstrate clarification flow: ask orchestrator for clarification
-//    const clarification = await this.requestClarification(
-//      "What are the minimum acceptable code-coverage thresholds for this project?"
-//    );
-//    logger.info(this.role, `Clarification received: "${clarification}"`);
-
     const prompt = [
-      `Task title: ${task.title}`,
-      `Task description: ${task.description}`,
-      // `Clarification received: ${clarification}`,
       "Return a complete QA strategy and test artifacts in markdown.",
       "Include unit, integration, end-to-end, and performance test considerations.",
     ].join("\n");
 
     let result: string;
     try {
-      result = await this.generate(prompt, {
+      result = await this.generateTaskResult(task, [prompt], {
         maxTokens: 4096,
         temperature: 0.2,
       });
@@ -132,39 +109,10 @@ You write thorough, well-structured test suites and produce clear bug reports.`,
     return result;
   }
 
-  // ─── Clarification helper ─────────────────────────────────────────────────
-
-  /**
-   * Send a clarification request to the orchestrator and await its response.
-   * Pre-generates the message id so we can register the resolver BEFORE the
-   * message is delivered (prevents the response arriving before we listen).
-   * Falls back after 2 s if the orchestrator does not reply.
-   */
-  /*private async requestClarification(question: string): Promise<string> {
-    const msgId = generateMessageId();
-
-    // Register the resolver BEFORE publishing so we never miss the reply.
-    const answer = new Promise<string>((resolve) => {
-      this.clarifications.set(msgId, resolve);
-      setTimeout(() => {
-        if (this.clarifications.has(msgId)) {
-          this.clarifications.delete(msgId);
-          resolve("Use industry-standard defaults: 80% line coverage.");
-        }
-      }, 2_000);
-    });
-
-    // Publish with the pre-generated id; bus will deliver reply with correlationId = msgId
-    await this.bus.publish({
-      id        : msgId,
-      type      : "clarification-request",
-      sender    : this.id,
-      recipient : "orchestrator",
-      content   : question,
-    });
-    this.recordTurn("assistant", `→ [orchestrator] ${question}`);
-
-    return answer;
+  protected override getTaskExecutionGuidance(_task: Task): string[] {
+    return [
+      "If the test strategy depends on a missing acceptance criterion or environment detail, ask one concise clarification question.",
+      "Do not fabricate quality gates, thresholds, or environments.",
+    ];
   }
-  */
 }

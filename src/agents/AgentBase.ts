@@ -16,6 +16,8 @@
 import {
   AgentProfile,
   AgentId,
+  ClarificationTurn,
+  MessageId,
   Message,
   MessageType,
   Task,
@@ -23,10 +25,13 @@ import {
 } from "../types";
 import { MessageBus } from "../flow/MessageBus";
 import { logger } from "../utils/logger";
+import { generateMessageId } from "../utils/ids";
 import { createLLM } from "../services/llm/factory";
 import { LLM, LLMGenerateOptions, LLMMessage } from "../services/llm/llm";
 
 export abstract class AgentBase {
+  protected static readonly MAX_TASK_CLARIFICATIONS = 1;
+
   // ─── Identity ───────────────────────────────────────────────────────────────
   readonly profile: AgentProfile;
 
@@ -36,6 +41,13 @@ export abstract class AgentBase {
   // ─── Per-agent conversation history ────────────────────────────────────────
   protected readonly history: ConversationTurn[] = [];
   protected readonly llm: LLM;
+  private readonly taskExecutionContexts = new Map<string, {
+    taskSender: AgentId;
+    context: Record<string, unknown>;
+    clarifications: ClarificationTurn[];
+    clarificationCount: number;
+  }>();
+  private readonly clarificationResolvers = new Map<MessageId, (answer: string) => void>();
 
   constructor(profile: AgentProfile, bus: MessageBus) {
     this.profile = profile;
@@ -102,6 +114,10 @@ export abstract class AgentBase {
 
     this.recordTurn("user", `← [${message.sender}] ${message.content}`);
 
+    if (this.tryResolveClarificationResponse(message)) {
+      return;
+    }
+
     await this.handleMessage(message);
   }
 
@@ -147,6 +163,155 @@ export abstract class AgentBase {
     });
     this.recordTurn("assistant", response);
     return response;
+  }
+
+  // ─── Shared task clarification flow ───────────────────────────────────────
+
+  protected beginTaskExecution(task: Task, taskSender: AgentId, payload?: Record<string, unknown>): void {
+    this.taskExecutionContexts.set(task.id, {
+      taskSender,
+      context: (payload?.context as Record<string, unknown> | undefined) ?? {},
+      clarifications: [],
+      clarificationCount: 0,
+    });
+  }
+
+  protected finishTaskExecution(taskId: string): { clarifications: ClarificationTurn[] } {
+    const context = this.taskExecutionContexts.get(taskId);
+    this.taskExecutionContexts.delete(taskId);
+    return {
+      clarifications: context?.clarifications ?? [],
+    };
+  }
+
+  protected async generateTaskResult(
+    task: Task,
+    promptSections: string[],
+    options: LLMGenerateOptions = {}
+  ): Promise<string> {
+    let clarificationRound = 0;
+
+    while (clarificationRound <= AgentBase.MAX_TASK_CLARIFICATIONS) {
+      const prompt = this.buildTaskExecutionPrompt(task, promptSections);
+      const response = await this.generate(prompt, options);
+      const question = this.extractClarificationQuestion(response);
+
+      if (!question) {
+        return response;
+      }
+
+      if (clarificationRound >= AgentBase.MAX_TASK_CLARIFICATIONS) {
+        return `Task \"${task.title}\" could not be completed because required information is missing: ${question}`;
+      }
+
+      const answer = await this.requestTaskClarification(task.id, question, 4_000);
+      this.recordClarification(task.id, question, answer);
+      clarificationRound += 1;
+    }
+
+    return `Task \"${task.title}\" could not be completed because required information is missing.`;
+  }
+
+  protected getTaskExecutionGuidance(_task: Task): string[] {
+    return [];
+  }
+
+  private buildTaskExecutionPrompt(task: Task, promptSections: string[]): string {
+    const context = this.taskExecutionContexts.get(task.id);
+    const clarificationLines = (context?.clarifications ?? []).flatMap((turn, index) => [
+      `Clarification ${index + 1} question: ${turn.question}`,
+      `Clarification ${index + 1} answer: ${turn.answer}`,
+    ]);
+
+    const dependencyContext = Object.entries(context?.context ?? {}).flatMap(([key, value]) => [
+      `${key}: ${String(value)}`,
+    ]);
+
+    return [
+      `Task title: ${task.title}`,
+      `Task description: ${task.description}`,
+      ...dependencyContext,
+      ...clarificationLines,
+      ...this.getTaskExecutionGuidance(task),
+      ...promptSections,
+      "If critical information is missing and prevents a solid answer, respond exactly with: NEEDS_INFO: <one concise question>",
+      "Otherwise, provide the final answer only.",
+    ].join("\n");
+  }
+
+  private extractClarificationQuestion(response: string): string | null {
+    const trimmed = response.trim();
+    if (!trimmed.toUpperCase().startsWith("NEEDS_INFO:")) {
+      return null;
+    }
+
+    const question = trimmed.slice("NEEDS_INFO:".length).trim();
+    return question.length > 0 ? question : "What essential information is missing?";
+  }
+
+  private async requestTaskClarification(
+    taskId: string,
+    question: string,
+    timeoutMs?: number
+  ): Promise<string> {
+    const context = this.taskExecutionContexts.get(taskId);
+    if (!context) {
+      return "No task sender available for clarification.";
+    }
+
+    const messageId = generateMessageId();
+    const waitMs = timeoutMs ?? 4_000;
+
+    const answer = new Promise<string>((resolve) => {
+      this.clarificationResolvers.set(messageId, resolve);
+
+      setTimeout(() => {
+        if (this.clarificationResolvers.has(messageId)) {
+          this.clarificationResolvers.delete(messageId);
+          resolve("No clarification response received.");
+        }
+      }, waitMs);
+    });
+
+    await this.send(
+      context.taskSender,
+      "clarification-request",
+      question,
+      { taskId },
+      messageId
+    );
+
+    return answer;
+  }
+
+  private recordClarification(taskId: string, question: string, answer: string): void {
+    const context = this.taskExecutionContexts.get(taskId);
+    if (!context) {
+      return;
+    }
+
+    context.clarificationCount += 1;
+    context.clarifications.push({
+      senderId: this.id,
+      responderId: context.taskSender,
+      question,
+      answer,
+    });
+  }
+
+  private tryResolveClarificationResponse(message: Message): boolean {
+    if (message.type !== "clarification-response" || !message.correlationId) {
+      return false;
+    }
+
+    const resolver = this.clarificationResolvers.get(message.correlationId);
+    if (!resolver) {
+      return false;
+    }
+
+    this.clarificationResolvers.delete(message.correlationId);
+    resolver(message.content);
+    return true;
   }
 
   /** Read-only snapshot of this agent's conversation history */

@@ -20,6 +20,7 @@ import { MessageBus } from "../flow/MessageBus";
 import {
   AgentProfile,
   AgentId,
+  ClarificationTurn,
   Message,
   Task,
   TaskId,
@@ -55,9 +56,10 @@ interface TaskBlueprint {
 export class OrchestratorAgent extends AgentBase {
   private readonly planner   = new TaskPlanner();
   private readonly registry  = new Map<AgentId, AgentDescriptor>();
+  private currentGoal = "";
 
   /** Resolvers keyed by taskId — resolved when the task result arrives */
-  private readonly pendingTasks = new Map<TaskId, (result: string) => void>();
+  private readonly pendingTasks = new Map<TaskId, (result: { content: string; payload?: Record<string, unknown> }) => void>();
 
   constructor(bus: MessageBus) {
     const profile: AgentProfile = {
@@ -92,6 +94,7 @@ Always be decisive, clear, and structured in your instructions.`,
    * Returns the aggregated final report as a string.
    */
   async run(goal: string): Promise<string> {
+    this.currentGoal = goal;
     logger.divider();
     logger.info("orchestrator", `🎯 New goal received: "${goal}"`);
     logger.divider();
@@ -179,7 +182,7 @@ Always be decisive, clear, and structured in your instructions.`,
         title: "Frontend UI Development",
         description: "Build the frontend application with responsive UX and integrate it with the backend APIs.",
         priority: "high",
-        dependsIn: ["architecture"],
+        dependsIn: ["architecture", "backend"],
         preferredRoles: ["developer"],
         capabilityHints: ["frontend-development", "api-integration"],
       });
@@ -405,7 +408,7 @@ Always be decisive, clear, and structured in your instructions.`,
 
     // Await the result (may already be resolved if the agent ran synchronously)
     const result = await resultPromise;
-    this.planner.recordResult(task.id, result);
+    this.planner.recordResult(task.id, result.content, result.payload);
   }
 
   /** Build context by attaching results of dependency tasks */
@@ -421,7 +424,7 @@ Always be decisive, clear, and structured in your instructions.`,
   }
 
   /** Promisify waiting for a task result message */
-  private awaitTaskResult(taskId: TaskId): Promise<string> {
+  private awaitTaskResult(taskId: TaskId): Promise<{ content: string; payload?: Record<string, unknown> }> {
     return new Promise((resolve) => {
       this.pendingTasks.set(taskId, resolve);
     });
@@ -454,18 +457,18 @@ Always be decisive, clear, and structured in your instructions.`,
         const resolver = this.pendingTasks.get(taskId);
         if (resolver) {
           this.pendingTasks.delete(taskId);
-          resolver(message.content);
+          resolver({ content: message.content, payload: message.payload });
         }
         break;
       }
 
       case "clarification-request": {
         logger.info("orchestrator", `Clarification requested by ${message.sender}: "${message.content}"`);
-        // Auto-respond with a generic clarification for the demo
+        const answer = await this.answerClarificationRequest(message);
         await this.send(
           message.sender,
           "clarification-response",
-          `Proceed with best-practice defaults for: "${message.content}". Prioritise scalability and maintainability.`,
+          answer,
           undefined,
           message.id
         );
@@ -507,6 +510,17 @@ Always be decisive, clear, and structured in your instructions.`,
       (task.result ?? "(no result)")
         .split("\n")
         .forEach((l: any) => lines.push(`│    ${l}`));
+
+      const clarifications = (task.resultPayload?.clarifications as ClarificationTurn[] | undefined) ?? [];
+      if (clarifications.length > 0) {
+        lines.push("│  Clarifications:");
+        for (const [index, turn] of clarifications.entries()) {
+          lines.push(`│    ${index + 1}. ${turn.senderId} -> ${turn.responderId}`);
+          lines.push(`│       Q: ${turn.question}`);
+          lines.push(`│       A: ${turn.answer}`);
+        }
+      }
+
       lines.push("│");
     }
 
@@ -517,5 +531,33 @@ Always be decisive, clear, and structured in your instructions.`,
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
+
+  private async answerClarificationRequest(message: Message): Promise<string> {
+    const taskId = message.payload?.taskId as TaskId | undefined;
+    const task = taskId ? this.planner.getTask(taskId) : undefined;
+    const taskContext = task ? this.buildContextForTask(task) : {};
+
+    const prompt = [
+      "An executing agent needs clarification to continue a task.",
+      `Goal: ${this.currentGoal}`,
+      task ? `Task title: ${task.title}` : "Task title: unknown",
+      task ? `Task description: ${task.description}` : "Task description: unknown",
+      ...Object.entries(taskContext).map(([key, value]) => `${key}: ${value}`),
+      `Question: ${message.content}`,
+      "Answer using only the information available from the goal and completed task outputs.",
+      "If the answer is not available, say explicitly what is unknown and give the narrowest reasonable guidance.",
+      "Keep the answer concise and actionable.",
+    ].join("\n");
+
+    try {
+      return await this.generate(prompt, {
+        maxTokens: 400,
+        temperature: 0.2,
+      });
+    } catch (error) {
+      logger.warn("orchestrator", `Failed to answer clarification request: ${String(error)}`);
+      return "The required detail is not available from the current goal and completed task outputs.";
+    }
+  }
 
 }
