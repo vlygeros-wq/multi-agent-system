@@ -80,8 +80,15 @@ async function main(): Promise<void> {
   const goal =
     `Build a web-based debt collection application that enables financial and insurance 
     teams to monitor unpaid invoices, assess client risk levels, and prioritize collection 
-    actions. The system must provide a KPI-driven dashboard and a detailed client list with 
-    invoice and insurance‑risk information.`;
+    actions.
+    Define the structure of the project repository, including a clear README and documentation for future developers.
+    Define the system architecture, implement the backend and frontend components, and ensure
+    the application is robustly tested.
+    The system must implement a secure authentication mechanism, role-based access control, and an intuitive UI.
+    All displays should be mobile-responsive. The backend should expose a RESTful API for all core functionalities.
+    All lists of clients and invoices must be filterable and sortable.
+    The system must provide a KPI-driven dashboard and a detailed client list with 
+    invoice and insurance-risk information.`;
 
   // 5. Run the full orchestration pipeline
   const report = await orchestrator.run(goal);

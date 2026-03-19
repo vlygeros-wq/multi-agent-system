@@ -87,8 +87,31 @@ Your outputs are always structured, detailed, and include concrete tech-stack re
     );
 
     const prompt = [
-      "Produce a complete, implementation-ready markdown response.",
-      "Include concrete technologies, APIs, and operational considerations.",
+      "Clarify the context and objectives before proceeding.",
+      "Present a clear high-level architectural design addressing the task requirements.",
+      "Describe the critical flow of data and interactions between components.",
+      "Take into account scalability, security, and maintainability best practices.",
+      "Treat security as a first-class concern and include specific measures in your design.",
+      "Compliance and regulatory considerations should be explicitly addressed in the architecture.",
+      "Observability and monitoring should be integrated into the architecture from the start.",
+      "Error handling and failure modes should be clearly defined for each component.",
+      "Provide trade-offs and alternatives if there are multiple viable approaches.",
+      "Your output should be detailed and structured, suitable for guiding development and serving as technical documentation.",
+      "Use concrete technology recommendations where appropriate.",
+      "If you encounter ambiguities in the task requirements that materially affect the architecture, ask one focused clarification question.",
+      "If the task is too large to execute in one step, break it down into smaller subtasks and execute them sequentially, reporting progress after each subtask.",
+      "If the task depends on another task that has not yet completed, ask the orchestrator for an update on the prerequisite task before proceeding.",
+      "If you identify a potential architectural risk or bottleneck, highlight it in your response and suggest mitigation strategies.",
+      "If the task requires integration with external systems or APIs, ensure your design accounts for their constraints and limitations.",
+      "If you need to make assumptions due to missing information, clearly state those assumptions in your response.",
+      "If you need to collaborate with the developer for implementation considerations, proactively reach out to them via inter-agent messaging.",
+      "After completing the task, provide a summary of your architectural design and the rationale behind your decisions.",
+      "If you had to ask for clarification, include the question you asked and the answer you received in your task result for transparency.",
+      "If you encountered any challenges during the design process, describe these challenges and how you overcame them in your task result.",
+      "If your design includes any third-party services or tools, provide a brief justification for their inclusion and how they fit into the overall architecture.",
+      "If your design includes any security considerations, such as authentication mechanisms or data encryption, explicitly describe these in your task result.",
+      "If your design includes any scalability considerations, such as load balancing or auto-scaling strategies, describe these considerations and how they contribute to the system's ability to handle increased load in your task result.",
+      "If your design includes any maintainability considerations, such as modularization or documentation practices, describe these considerations and how they facilitate future development efforts in your task result.",
     ].join("\n");
 
     let result: string;
